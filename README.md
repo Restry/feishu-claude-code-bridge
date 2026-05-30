@@ -19,8 +19,10 @@ A lightweight bot that bridges Feishu / Lark messenger with your local Claude Co
 ## Prerequisites
 
 - Node.js **>= 20**
-- `claude` CLI installed and logged in — see https://docs.anthropic.com/en/docs/claude-code/quickstart
-- A Lark / Feishu **PersonalAgent** app (the QR-code wizard on first launch can create one for you).
+- `claude` CLI installed and authenticated. Two paths:
+  - **OAuth**: run `claude` once interactively to log in.
+  - **API key** (recommended for headless / server deployments): set `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_BASE_URL` for proxies / gateways) in the environment that spawns the bridge. See [MCP server mode](#mcp-server-mode) below for how to pass these through when an MCP client launches the bridge as a subprocess.
+- A Lark / Feishu **PersonalAgent** app — only needed for the Feishu bridge mode (the QR-code wizard on first launch can create one for you). **Not needed if you only use the MCP server.**
 
 ## Install
 
@@ -99,6 +101,66 @@ Daemon logs go to `~/.lark-channel/logs/daemon-stdout.log` and `daemon-stderr.lo
 | Any other `/xxx` | Forwarded verbatim to Claude |
 
 **Reply policy**: in a DM, the bot replies to anything. In a **group (including topic groups), the bot only replies when `@`-mentioned** (default since 0.1.22); unmentioned messages are ignored. `@all` is never answered. Cloud-doc comments must mention the bot. To restore the older "always answer in groups" behaviour: `/config` → "Require @bot in groups" → No.
+
+## MCP server mode
+
+Besides the Feishu bridge, the same package exposes Claude Code as an **MCP stdio server** so that any MCP-aware client (Hermes, Claude Desktop, etc.) can call Claude Code asynchronously without blocking its own chat loop.
+
+```bash
+lark-channel-bridge mcp \
+  --cwd /path/to/default/workspace \
+  --cwd-root /path/to/default/workspace \
+  --cwd-root /tmp
+```
+
+- `--cwd` — default working directory for spawned Claude tasks. Caller can override per call.
+- `--cwd-root` — repeatable whitelist. If set, task `cwd` must resolve under one of these roots. Recommended for any deployment that exposes the server to untrusted callers.
+
+### Tools exposed
+
+| Tool | Purpose |
+|---|---|
+| `claude_run(prompt, cwd?, session_id?, model?)` | Start a task; returns immediately with `task_id`. |
+| `claude_status(task_id)` | Snapshot: status, text-so-far, current tool, counters. |
+| `claude_wait(task_id, from_seq?, timeout_ms?)` | Short-block (≤ 120 s) for new events since `from_seq`. |
+| `claude_cancel(task_id)` | SIGTERM (then SIGKILL) a running task. |
+| `claude_list()` | List all tasks (running + terminal). |
+| `claude_forget(task_id)` | Drop a finished task from memory. |
+
+Long-running tasks (1–2 hours) don't sit in a single synchronous tool call. The client pattern is: `claude_run` → keep chatting → `claude_wait` / `claude_status` when you want progress → next `claude_wait` with the highest seen `seq` to stream incrementally.
+
+### Hermes config example
+
+Edit `~/.hermes/config.yaml`, add a top-level `mcp_servers:` block:
+
+```yaml
+mcp_servers:
+  cc:
+    command: node
+    args:
+      - /path/to/feishu-claude-code-bridge/bin/lark-channel-bridge.mjs
+      - mcp
+      - --cwd
+      - /home/me/Projects
+      - --cwd-root
+      - /home/me/Projects
+      - --cwd-root
+      - /tmp
+    env:
+      # Pass auth through — MCP clients spawn the bridge as a bare subprocess,
+      # so .zshrc / .bashrc env is NOT inherited.
+      ANTHROPIC_API_KEY: "sk-..."
+      # Optional, for proxies / gateways:
+      ANTHROPIC_BASE_URL: "https://api.example.com"
+    timeout: 180         # max blocking time per MCP tool call (claude_wait caps internally at 120 s)
+    connect_timeout: 30
+```
+
+Then in a Hermes chat, run `/reload-mcp` to hot-load without restarting. Verify with `hermes mcp test cc`.
+
+> ⚠️ **Auth gotcha**: MCP clients spawn the bridge directly (`node ...`), bypassing your interactive shell. If `claude` is authenticated via the OAuth flow and you rely on shell env vars to find a config, those env vars are **not inherited**. Either set `ANTHROPIC_API_KEY` explicitly in the `env:` block (recommended) or wrap the `command` in `zsh -ic`.
+
+> ⚠️ **Security**: tasks run with `--permission-mode bypassPermissions` (no confirmation prompts). For multi-tenant or untrusted callers, always use `--cwd-root` and treat the host machine as fully delegated to whoever can call the MCP server.
 
 ## Data directories
 

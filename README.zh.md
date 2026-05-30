@@ -19,8 +19,10 @@
 ## 前置条件
 
 - Node.js **≥ 20**
-- `claude` CLI 已安装并登录：https://docs.anthropic.com/en/docs/claude-code/quickstart
-- 一个飞书 / Lark PersonalAgent 应用（首次启动的扫码向导能帮你创建）
+- `claude` CLI 已安装并完成认证。两条路：
+  - **OAuth**：手动跑一次 `claude` 完成交互式登录。
+  - **API Key**（无人值守/服务器部署推荐）：在拉起 bridge 的环境里设 `ANTHROPIC_API_KEY`（如走代理/网关再加 `ANTHROPIC_BASE_URL`）。MCP client 拉起 bridge 时怎么把这两个传进去，见下面 [MCP server 模式](#mcp-server-模式)。
+- 飞书 / Lark **PersonalAgent** 应用 —— **仅飞书 bridge 模式需要**（首次启动的扫码向导能帮你创建）。**只用 MCP server 不需要。**
 
 ## 安装
 
@@ -99,6 +101,66 @@ daemon 的 stdout / stderr 写到 `~/.lark-channel/logs/daemon-stdout.log` 和 `
 | 其它 `/xxx` | 原样交给 Claude |
 
 **消息策略**：私聊 = 不需要 @，任何消息都回；**群（含话题群）= 默认要 @bot 才回**（0.1.22 起的新默认），不 @ 时 bot 完全沉默；@全员永远不响应；云文档评论必须 @bot。要恢复"群里也不强制 @"的老行为：`/config` → "群里需要 @ bot" → 选"否"。
+
+## MCP server 模式
+
+除了飞书 bridge，同一个包还能把 Claude Code 暴露成一个 **MCP stdio server**，让任何 MCP client（Hermes、Claude Desktop 等）异步调 Claude Code，不阻塞自己的对话主循环。
+
+```bash
+lark-channel-bridge mcp \
+  --cwd /path/to/default/workspace \
+  --cwd-root /path/to/default/workspace \
+  --cwd-root /tmp
+```
+
+- `--cwd` —— 任务的默认工作目录，调用方可在每次调用时覆盖。
+- `--cwd-root` —— 可重复指定的白名单。若设置，任务的 `cwd` 必须落在某个 root 下。**暴露给非信任调用方时强烈建议加上**。
+
+### 暴露的工具
+
+| 工具 | 作用 |
+|---|---|
+| `claude_run(prompt, cwd?, session_id?, model?)` | 起任务，立即返回 `task_id`。 |
+| `claude_status(task_id)` | 快照：状态、已积累文本、当前工具、计数器。 |
+| `claude_wait(task_id, from_seq?, timeout_ms?)` | 短阻塞（≤ 120 秒）拉取 `from_seq` 之后的新事件。 |
+| `claude_cancel(task_id)` | 先 SIGTERM 再 SIGKILL 中断任务。 |
+| `claude_list()` | 列出所有任务（running + 终态）。 |
+| `claude_forget(task_id)` | 从内存里释放一个已结束的任务。 |
+
+1–2 小时的长任务**不会**占满一次 MCP 调用：调用方模式是 `claude_run` → 该聊别的聊别的 → 想看进度时调 `claude_wait` / `claude_status` → 下一次 `claude_wait` 带上最高的 `seq` 增量拉取。
+
+### Hermes 接入示例
+
+编辑 `~/.hermes/config.yaml`，加顶层 `mcp_servers:` 块：
+
+```yaml
+mcp_servers:
+  cc:
+    command: node
+    args:
+      - /path/to/feishu-claude-code-bridge/bin/lark-channel-bridge.mjs
+      - mcp
+      - --cwd
+      - /home/me/Projects
+      - --cwd-root
+      - /home/me/Projects
+      - --cwd-root
+      - /tmp
+    env:
+      # 显式传 auth —— MCP client 直接 spawn 子进程,不走 shell,
+      # 所以 .zshrc / .bashrc 里的环境变量 **不会** 被继承。
+      ANTHROPIC_API_KEY: "sk-..."
+      # 走代理 / 网关时:
+      ANTHROPIC_BASE_URL: "https://api.example.com"
+    timeout: 180         # 每次 MCP 调用的最大阻塞时长(claude_wait 内部封顶 120 秒)
+    connect_timeout: 30
+```
+
+然后在 Hermes 对话里发 `/reload-mcp` 热加载,不用重启。也可以 `hermes mcp test cc` 验证连通。
+
+> ⚠️ **认证坑**: MCP client 是直接 `node ...` 拉起 bridge,**不走交互式 shell**。所以如果你的 `claude` 是 OAuth 登录 + 依赖 shell 环境变量定位配置,这些环境变量**不会被继承**。要么在 `env:` 块里显式写 `ANTHROPIC_API_KEY`(推荐),要么把 `command` 包成 `zsh -ic`。
+
+> ⚠️ **安全**: 任务都是 `--permission-mode bypassPermissions`(无任何确认)。多租户或非信任调用方场景下,**务必**配 `--cwd-root`,并把本机视为整台交给调用方支配。
 
 ## 数据目录
 
