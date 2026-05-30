@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import pkg from '../../package.json';
+import { runMcp } from './commands/mcp';
 import { runMigrate } from './commands/migrate';
 import { runKillCli, runPs } from './commands/ps';
 import {
@@ -119,6 +120,24 @@ secrets
   .requiredOption('--app-id <id>', 'App ID to remove')
   .action(async (opts: { appId: string }) => {
     await runSecretsRemove(opts.appId);
+  });
+
+// === MCP server transport (for Hermes / other MCP clients) ===
+
+program
+  .command('mcp')
+  .description(
+    'Run an MCP stdio server that exposes Claude Code as async tools (claude_run / claude_status / claude_wait / claude_cancel / claude_list / claude_forget). Hook it up via `hermes mcp add`.',
+  )
+  .option('--cwd <path>', 'default working directory for spawned Claude tasks')
+  .option(
+    '--cwd-root <path>',
+    'restrict task cwd to a whitelist root (repeatable). Tasks outside are rejected.',
+    (value: string, prev: string[] = []) => prev.concat(value),
+    [] as string[],
+  )
+  .action(async (opts: { cwd?: string; cwdRoot?: string[] }) => {
+    await runMcp({ cwd: opts.cwd, cwdRoot: opts.cwdRoot });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {

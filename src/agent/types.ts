@@ -22,6 +22,12 @@ export interface AgentRunOptions {
    * are adapter-specific.
    */
   stopGraceMs?: number;
+  /**
+   * Override `--append-system-prompt`. Adapters use their own default when
+   * this is undefined; pass `null` to skip the flag entirely (e.g. for
+   * non-Feishu transports like the MCP server).
+   */
+  appendSystemPrompt?: string | null;
 }
 
 export interface AgentRun {

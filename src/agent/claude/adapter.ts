@@ -178,9 +178,12 @@ export class ClaudeAdapter implements AgentAdapter {
       '--verbose',
       '--permission-mode',
       opts.permissionMode ?? 'bypassPermissions',
-      '--append-system-prompt',
-      BRIDGE_SYSTEM_PROMPT,
     ];
+    const appendSystemPrompt =
+      opts.appendSystemPrompt === undefined ? BRIDGE_SYSTEM_PROMPT : opts.appendSystemPrompt;
+    if (appendSystemPrompt !== null) {
+      args.push('--append-system-prompt', appendSystemPrompt);
+    }
     if (opts.sessionId) args.push('--resume', opts.sessionId);
     if (opts.model) args.push('--model', opts.model);
 
