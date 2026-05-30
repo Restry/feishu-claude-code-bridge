@@ -37,6 +37,10 @@ export interface TaskSnapshot {
 interface InternalTask {
   snapshot: TaskSnapshot;
   events: TaskEventRecord[];
+  /** Monotonic across the task's lifetime — survives buffer truncation. */
+  nextSeq: number;
+  /** Lowest seq still retained in `events` after trimming. */
+  oldestSeq: number;
   run: AgentRun;
   /** Resolves when consumeEvents() finishes draining the AsyncIterable. */
   finished: Promise<void>;
@@ -73,6 +77,8 @@ export class TaskRegistry {
     const task: InternalTask = {
       snapshot,
       events: [],
+      nextSeq: 0,
+      oldestSeq: 0,
       run,
       waiters: [],
       finished: Promise.resolve(),
@@ -147,8 +153,13 @@ export class TaskRegistry {
       }
       if (task.snapshot.status === 'running') task.snapshot.status = 'done';
     } catch (err) {
-      task.snapshot.status = 'error';
-      task.snapshot.exitError = err instanceof Error ? err.message : String(err);
+      // Don't clobber a terminal status set by cancel() or an inline 'error' event.
+      if (task.snapshot.status === 'running') {
+        task.snapshot.status = 'error';
+      }
+      if (!task.snapshot.exitError) {
+        task.snapshot.exitError = err instanceof Error ? err.message : String(err);
+      }
     } finally {
       // Give the child process a moment to exit cleanly after the terminal
       // stream event. The adapter already implements this graceful wait.
@@ -163,11 +174,13 @@ export class TaskRegistry {
   }
 
   private recordEvent(task: InternalTask, event: AgentEvent): void {
-    const seq = task.events.length;
+    const seq = task.nextSeq++;
     const record: TaskEventRecord = { seq, ts: Date.now(), event };
     task.events.push(record);
     if (task.events.length > MAX_EVENT_BUFFER) {
-      task.events.splice(0, task.events.length - MAX_EVENT_BUFFER);
+      const dropCount = task.events.length - MAX_EVENT_BUFFER;
+      task.events.splice(0, dropCount);
+      task.oldestSeq = task.events[0]?.seq ?? task.nextSeq;
     }
     this.updateSnapshot(task, event);
     this.flushWaiters(task);

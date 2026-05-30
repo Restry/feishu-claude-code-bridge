@@ -4,6 +4,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { resolve as resolvePath, sep as pathSep } from 'node:path';
 import { ClaudeAdapter } from '../../agent/claude/adapter';
 import { TaskRegistry, type TaskEventRecord, type TaskSnapshot } from './task-registry';
 
@@ -116,12 +117,17 @@ function recordsToWire(records: TaskEventRecord[]) {
 }
 
 function resolveCwd(opts: McpServerOptions, requested?: string): string {
-  const candidate = requested?.trim() || opts.defaultCwd?.trim() || process.cwd();
+  const raw = requested?.trim() || opts.defaultCwd?.trim() || process.cwd();
+  // Normalize ./.. away so the whitelist check can't be bypassed via "/root/../etc".
+  const candidate = resolvePath(raw);
   if (opts.cwdRoots && opts.cwdRoots.length > 0) {
-    const ok = opts.cwdRoots.some((root) => candidate === root || candidate.startsWith(`${root}/`));
+    const normalizedRoots = opts.cwdRoots.map((r) => resolvePath(r));
+    const ok = normalizedRoots.some(
+      (root) => candidate === root || candidate.startsWith(root + pathSep),
+    );
     if (!ok) {
       throw new Error(
-        `cwd "${candidate}" is outside the allowed roots: ${opts.cwdRoots.join(', ')}`,
+        `cwd "${candidate}" is outside the allowed roots: ${normalizedRoots.join(', ')}`,
       );
     }
   }
