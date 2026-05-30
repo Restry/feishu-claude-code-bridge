@@ -129,6 +129,17 @@ lark-channel-bridge mcp \
 
 1–2 小时的长任务**不会**占满一次 MCP 调用：调用方模式是 `claude_run` → 该聊别的聊别的 → 想看进度时调 `claude_wait` / `claude_status` → 下一次 `claude_wait` 带上最高的 `seq` 增量拉取。
 
+### 约束与边界（已实测）
+
+任务状态是**进程内内存**，而 MCP server 是 stdio——它的生命周期绑定单个 MCP client 连接。由此有几条必须知道的边界：
+
+- **不持久 / 不跨进程**：server 进程一退，所有任务记录（`claude_list` / `claude_status` 能查到的一切）清零。另起一个客户端连接 = 另一个 server 进程 = 一份空的任务表。别指望"昨天建的任务今天还能 list 出来"，也别指望两个客户端共享同一份任务视图。
+- **定位**：这是一个**会话级任务调度器**，不是持久任务队列。典型用法——`claude_run` 拿 `task_id` → 同一连接内 `claude_wait` / `claude_status` 轮询到终态——完全可靠。
+- **resume 是显式的**：续接靠 `claude_run` 显式传 `session_id`（底层 `claude --resume <id>`），不靠 cwd 自动续。同一个 `cwd` 起的多个任务彼此隔离，不会串台。传一个不存在的 `session_id` 会让该任务直接失败（`No conversation found`），不会静默降级为新会话。
+- **事件缓冲上限**：每个任务最多保留最近 5000 条事件，更早的会被丢弃（`seq` 仍单调递增）。增量拉取请始终带上次见过的最高 `seq`。
+
+> 想要持久化（跨重启可查、多端共享任务列表）需要自行加一层：把任务表落到磁盘 / SQLite，server 启动时恢复。当前版本不做这件事。
+
 ### Hermes 接入示例
 
 编辑 `~/.hermes/config.yaml`，加顶层 `mcp_servers:` 块：

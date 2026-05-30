@@ -54,6 +54,20 @@ interface InternalTask {
 
 const MAX_EVENT_BUFFER = 5000;
 
+/**
+ * In-memory registry of async Claude tasks for the MCP stdio server.
+ *
+ * IMPORTANT — lifecycle & persistence boundary (verified by integration tests):
+ * task state lives entirely in `this.tasks` (a plain Map). The MCP server is
+ * stdio, so this registry's lifetime is bound to a single client connection —
+ * when the server process exits, every task record is gone. A second client
+ * connection gets a fresh, empty registry; there is NO cross-process or
+ * cross-restart visibility, and two clients never share a task view.
+ *
+ * This is a session-scoped scheduler, not a durable queue. Making tasks
+ * survive restarts (or be shared across clients) means spilling this Map to
+ * disk/SQLite and rehydrating on startup — intentionally out of scope here.
+ */
 export class TaskRegistry {
   private readonly tasks = new Map<string, InternalTask>();
 

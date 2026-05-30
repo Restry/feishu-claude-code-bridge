@@ -129,6 +129,17 @@ lark-channel-bridge mcp \
 
 Long-running tasks (1–2 hours) don't sit in a single synchronous tool call. The client pattern is: `claude_run` → keep chatting → `claude_wait` / `claude_status` when you want progress → next `claude_wait` with the highest seen `seq` to stream incrementally.
 
+### Constraints & boundaries (verified)
+
+Task state lives **in process memory**, and the MCP server is stdio — its lifetime is bound to a single MCP client connection. That implies a few boundaries you must know:
+
+- **Not persistent / not cross-process**: when the server process exits, every task record (everything `claude_list` / `claude_status` could see) is gone. A second client connection = a second server process = an empty task table. Don't expect "the task I started yesterday is still listable today", and don't expect two clients to share one task view.
+- **What it is**: a **session-scoped task scheduler**, not a durable task queue. The intended pattern — `claude_run` to get a `task_id` → poll `claude_wait` / `claude_status` within the same connection until terminal — is fully reliable.
+- **Resume is explicit**: continuation requires passing `session_id` to `claude_run` (under the hood `claude --resume <id>`); it does not auto-continue from `cwd`. Multiple tasks started in the same `cwd` are isolated and never cross-talk. Passing a non-existent `session_id` fails that task outright (`No conversation found`) — it does not silently fall back to a fresh session.
+- **Event buffer cap**: each task retains at most the latest 5000 events; older ones are dropped (`seq` stays monotonic). Always pass the highest `seq` you've seen for incremental pulls.
+
+> Persistence (listable across restarts, shared task list across clients) requires adding a layer yourself: spill the task table to disk / SQLite and restore it on server startup. The current version does not do this.
+
 ### Hermes config example
 
 Edit `~/.hermes/config.yaml`, add a top-level `mcp_servers:` block:

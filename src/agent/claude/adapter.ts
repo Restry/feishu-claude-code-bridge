@@ -184,6 +184,10 @@ export class ClaudeAdapter implements AgentAdapter {
     if (appendSystemPrompt !== null) {
       args.push('--append-system-prompt', appendSystemPrompt);
     }
+    // Resume by explicit session id — never `-c` / `--continue`. `-c` resumes
+    // "the most recent session in this cwd" by time, not by identity, and
+    // multiple bridge chats can share one cwd (they default to homedir), so
+    // `-c` would cross-talk between chats. Continuation is the caller's id.
     if (opts.sessionId) args.push('--resume', opts.sessionId);
     if (opts.model) args.push('--model', opts.model);
 
